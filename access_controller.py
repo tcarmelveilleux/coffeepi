@@ -14,6 +14,8 @@ import tacapp_driver
 import loggly.handlers
 import logging
 import time
+import sys
+import os
 
 from threading import Thread
 import Queue
@@ -21,6 +23,7 @@ import multiprocessing
 
 SHARED_KEY = "3812A419C63BE77100120019803BE771011201010103E771"
 LOGGLY_TOKEN = "9d1bfad8-a04c-4607-97e9-8a0c89a4ee3e"
+TRIGGER_DRIVER = "/bin/sh make_coffee.sh"
 
 class AccessControlDaemon(object):
     STATE_WAIT_FOR_CARD = "wait_for_card"
@@ -144,10 +147,15 @@ class AccessControlDaemon(object):
         session, atr_data = self.device.open_emv_cl_session()
         if session is None:
             # No card detected, nothing more to do
-            return False
+            return
 
         self.logger.info("Card detected, ATR data: %s", str(atr_data))
         self.session = session
+
+        # DOUBLE HACK: Run right away on card detect for now
+        self._front_panel_success()
+        self._trigger_authorized_system()
+        return
 
         try:
             # HACK: Route session to internal SAM slot 1
@@ -168,8 +176,7 @@ class AccessControlDaemon(object):
             # If applet did not return a serial number, it is not personalized yet. Emit an error
             if len(serial_number) == 0:
                 self.logger.info("Card not personalized!")
-                #self._front_panel_warning(3)
-                self._front_panel_error()
+                self._front_panel_warning(3)
                 self.state = self.STATE_WAITING_FOR_REMOVAL
                 self.session.close()
                 return
@@ -183,6 +190,7 @@ class AccessControlDaemon(object):
                 # TODO: Actuate something!
                 self.logger.info("Authentication succeeded for card serial number: %s!", str(serial_number))
                 self._front_panel_success()
+                self._trigger_authorized_system()
 
             # Step 3: Clean-up
             self.state = self.STATE_WAITING_FOR_REMOVAL
@@ -190,6 +198,10 @@ class AccessControlDaemon(object):
             return
         except Exception as e:
             self.logger.warn("Error while trying to communicate with card: %s", e.message)
+
+    def _trigger_authorized_system(self):
+        self.logger.info("Actuating authorized system with '%s'", TRIGGER_DRIVER)
+        os.system(TRIGGER_DRIVER)
 
 def setup_logging():
     logging.basicConfig(level=logging.INFO,
@@ -218,7 +230,7 @@ def setup_logging():
 def main():
     setup_logging()
 
-    server = AccessControlDaemon("COM13")
+    server = AccessControlDaemon(sys.argv[1])
     server.start()
 
 if __name__ == "__main__":
